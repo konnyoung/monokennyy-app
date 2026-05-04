@@ -1,14 +1,10 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/konnyoung/monokennyy-app/master/screenshots/home.png" width="100%" />
-</p>
-
 # monokennyy
 
 A desktop music player built with Electron, React and TypeScript. Stream hi-res FLAC and HD audio with personalized recommendations, lyrics, playlists, and offline downloads.
 
 ## Screenshots
 
-### Home — Personalized Recommendations
+### Home
 ![Home](screenshots/home.png)
 
 ### Artist Profile
@@ -17,7 +13,7 @@ A desktop music player built with Electron, React and TypeScript. Stream hi-res 
 ### Album View
 ![Album](screenshots/album.png)
 
-### Library — Playlists & Favorites
+### Library
 ![Library](screenshots/library.png)
 
 ## Features
@@ -40,4 +36,4 @@ A desktop music player built with Electron, React and TypeScript. Stream hi-res 
 
 ## Download
 
-Check the [Releases](https://github.com/konnyoung/monokennyy-app/releases) page for the latest installer.
+Check the [Releases](https://github.com/konnyoung/monokennyy-app/releases)
