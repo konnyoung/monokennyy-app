@@ -1,0 +1,1 @@
+declare module '@uimaxbai/am-lyrics/am-lyrics.js';
