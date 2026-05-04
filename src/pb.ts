@@ -1,6 +1,8 @@
 import PocketBase from 'pocketbase';
 
-export const PB_URL = 'https://pocketbase.kennyy.com.br';
+import { PB_URL as PUBLIC_PB_URL } from './env';
+
+export const PB_URL = PUBLIC_PB_URL;
 
 export const pb = new PocketBase(PB_URL);
 

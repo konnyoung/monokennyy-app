@@ -147,6 +147,9 @@ type AlbumCandidateAccumulator = {
 const RECOMMENDATION_NOISE_PATTERN =
   /\b(karaoke|tribute|original performed by|originally performed by|in the style of|piano version|instrumental version|tribute to)\b/i;
 
+const SEASONAL_NOISE_PATTERN =
+  /\b(christmas|xmas|jingle bell|silent night|santa claus|feliz navidad|white christmas|jingle bells|rudolph the red|frosty the snowman|auld lang syne|deck the halls|o holy night|hark the herald|away in a manger|we wish you a merry|little drummer boy|the first noel|o come all ye faithful|have yourself a merry little|let it snow|winter wonderland|carol of the bells|sleigh ride)\b/i;
+
 export function createEmptyProfile(): ListeningProfile {
   return { plays: [], recents: [], trackSignals: [] };
 }
@@ -387,16 +390,16 @@ function rankTasteEntities(bucket: Map<string, TasteEntity>, limit: number) {
 }
 
 function isNoisyTrackRecommendation(track: QobuzTrack) {
-  const haystack = [track.title, track.performer?.name, track.album?.title, track.album?.artist?.name]
+  const haystack = [track.title, track.album?.title]
     .filter(Boolean)
     .join(' ');
 
-  return RECOMMENDATION_NOISE_PATTERN.test(haystack);
+  return RECOMMENDATION_NOISE_PATTERN.test(haystack) || SEASONAL_NOISE_PATTERN.test(haystack);
 }
 
 function isNoisyAlbumRecommendation(album: QobuzAlbum) {
-  const haystack = [album.title, album.artist?.name, album.label?.name].filter(Boolean).join(' ');
-  return RECOMMENDATION_NOISE_PATTERN.test(haystack);
+  const haystack = [album.title, album.label?.name].filter(Boolean).join(' ');
+  return RECOMMENDATION_NOISE_PATTERN.test(haystack) || SEASONAL_NOISE_PATTERN.test(haystack);
 }
 
 function getTrackArtistKey(track: QobuzTrack) {
@@ -491,7 +494,13 @@ function selectDiversifiedCandidates<T>(entries: DiversifiedCandidate<T>[], limi
         continue;
       }
 
-      const artistReusePenalty = (artistCounts.get(entry.artistKey) ?? 0) * 1.1;
+      const artistReuseCount = artistCounts.get(entry.artistKey) ?? 0;
+      const artistReusePenalty =
+        artistReuseCount === 0
+          ? 0
+          : artistReuseCount === 1
+            ? 1.9
+            : 4.2 + (artistReuseCount - 2) * 1.8;
       const seedReusePenalty = (seedCounts.get(entry.primarySeedKey) ?? 0) * 0.34;
       const currentDiscoveryRatio = selected.length === 0 ? 0 : discoveryCount / selected.length;
       const discoveryAdjustment = entry.isDiscovery
@@ -932,12 +941,22 @@ export function buildHomeFeed(profile: ListeningProfile, seedResults: SeedResult
       const replayRate = artistPreference ? artistPreference.replayCount / Math.max(1, artistPreference.playCount) : 0;
       const isKnownArtist = normalizedArtistName.length > 0 && listenedArtistNames.has(normalizedArtistName);
       const isDiscoveryCandidate = seed.source === 'discovery-artist' || !isKnownArtist;
+
+      // Penalize tracks that don't match the seed artist in taste-artist searches
+      // (Qobuz search returns unrelated tracks that happen to match query text)
+      const normalizedSeedQuery = normalizeName(seed.query);
+      const trackMatchesSeedArtist = seed.kind === 'artist' && normalizedArtistName.length > 0 &&
+        (normalizedArtistName === normalizedSeedQuery || normalizedArtistName.includes(normalizedSeedQuery) || normalizedSeedQuery.includes(normalizedArtistName));
+      const seedArtistMismatchPenalty = seed.source === 'taste-artist' && !trackMatchesSeedArtist && !isKnownArtist
+        ? seed.weight * 0.7
+        : 0;
+
       const discoveryBonus = isDiscoveryCandidate
-        ? 1.05 + explorationAppetite * 0.42 + Math.max(0, 0.35 - familiarity)
+        ? 0.6 + explorationAppetite * 0.3 + Math.max(0, 0.2 - familiarity)
         : 0.12;
       const comfortBonus = isDiscoveryCandidate
         ? 0
-        : 0.18 + affinity * 0.3 + completionRate * 0.42 + (artistPreference?.likeCount ?? 0) * 0.08;
+        : 0.3 + affinity * 0.45 + completionRate * 0.5 + (artistPreference?.likeCount ?? 0) * 0.12;
       const oversaturationPenalty = isDiscoveryCandidate ? 0 : Math.max(0, familiarity - 0.95) * 1.05;
       const skipPenalty = skipRate * 1.5;
       const nextScore =
@@ -949,7 +968,8 @@ export function buildHomeFeed(profile: ListeningProfile, seedResults: SeedResult
         replayRate * 0.35 +
         (track.hires ? 0.12 : 0) -
         skipPenalty -
-        oversaturationPenalty;
+        oversaturationPenalty -
+        seedArtistMismatchPenalty;
 
       storeTrackCandidate(trackCandidates, track, seed, nextScore, isDiscoveryCandidate, familiarity);
     });
@@ -972,6 +992,15 @@ export function buildHomeFeed(profile: ListeningProfile, seedResults: SeedResult
         : 0;
       const isKnownArtist = normalizedArtistName.length > 0 && listenedArtistNames.has(normalizedArtistName);
       const isDiscoveryCandidate = seed.source === 'discovery-artist' || !isKnownArtist;
+
+      // Penalize albums that don't match the seed artist in taste-artist searches
+      const normalizedSeedQuery = normalizeName(seed.query);
+      const albumMatchesSeedArtist = seed.kind === 'artist' && normalizedArtistName.length > 0 &&
+        (normalizedArtistName === normalizedSeedQuery || normalizedArtistName.includes(normalizedSeedQuery) || normalizedSeedQuery.includes(normalizedArtistName));
+      const seedArtistMismatchPenalty = seed.source === 'taste-artist' && !albumMatchesSeedArtist && !isKnownArtist
+        ? seed.weight * 0.65
+        : 0;
+
       const discoveryBonus = isDiscoveryCandidate ? 0.8 + explorationAppetite * 0.3 : 0.08;
       const comfortBonus = isDiscoveryCandidate
         ? 0
@@ -986,7 +1015,8 @@ export function buildHomeFeed(profile: ListeningProfile, seedResults: SeedResult
         affinity * 0.42 +
         (album.hires ? 0.12 : 0) -
         skipPenalty -
-        oversaturationPenalty;
+        oversaturationPenalty -
+        seedArtistMismatchPenalty;
 
       storeAlbumCandidate(albumCandidates, album, seed, nextScore, isDiscoveryCandidate, familiarity);
     });
@@ -1011,7 +1041,7 @@ export function buildHomeFeed(profile: ListeningProfile, seedResults: SeedResult
       }))
       .sort((left, right) => right.score - left.score || left.artistName.localeCompare(right.artistName)),
     trackLimit,
-    insights.stage >= 3 ? 0.72 : insights.stage >= 2 ? 0.56 : 0.35,
+    insights.stage >= 3 ? 0.45 : insights.stage >= 2 ? 0.35 : 0.25,
   );
 
   const rankedAlbums = selectDiversifiedCandidates(
@@ -1030,7 +1060,7 @@ export function buildHomeFeed(profile: ListeningProfile, seedResults: SeedResult
       }))
       .sort((left, right) => right.score - left.score || left.artistName.localeCompare(right.artistName)),
     albumLimit,
-    insights.stage >= 3 ? 0.58 : insights.stage >= 2 ? 0.44 : 0.24,
+    insights.stage >= 3 ? 0.4 : insights.stage >= 2 ? 0.3 : 0.2,
   );
 
   const artistSectionMap = new Map<string, { tracks: QobuzTrack[]; albums: QobuzAlbum[] }>();

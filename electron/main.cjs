@@ -2,12 +2,56 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { load } = require('cheerio');
 const packageJson = require('../package.json');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const ffmpegPath = require('ffmpeg-static');
+
+function loadLocalEnvFile() {
+  const candidatePaths = [
+    path.join(process.cwd(), '.env'),
+    path.join(__dirname, '..', '.env'),
+  ];
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      const content = fsSync.readFileSync(candidatePath, 'utf8');
+      for (const line of content.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) {
+          continue;
+        }
+
+        const separatorIndex = trimmed.indexOf('=');
+        if (separatorIndex <= 0) {
+          continue;
+        }
+
+        const key = trimmed.slice(0, separatorIndex).trim();
+        let value = trimmed.slice(separatorIndex + 1).trim();
+        if (
+          (value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))
+        ) {
+          value = value.slice(1, -1);
+        }
+
+        if (process.env[key] === undefined) {
+          process.env[key] = value.replace(/\\n/g, '\n');
+        }
+      }
+
+      return;
+    } catch {
+      // Ignore missing local env files.
+    }
+  }
+}
+
+loadLocalEnvFile();
 
 const isDev = !app.isPackaged;
 let mainWindow = null;

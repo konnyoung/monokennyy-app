@@ -33,6 +33,7 @@ import {
   X,
 } from 'lucide-react';
 import { getAlbum, getTrackUrl, searchQobuz } from './api';
+import { getLastFmRecommendations, getLastFmSimilarArtists } from './lastfm-api';
 import {
   buildHomeFeed,
   buildListeningInsights,
@@ -1653,9 +1654,57 @@ export default function App() {
     return settled.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
   }
 
+  async function resolveLastFmRecommendationsToTracks(
+    recommendations: Array<{ artist: string; title: string; match: number }>,
+    limit = 50,
+  ) {
+    if (recommendations.length === 0) {
+      return [] as QobuzTrack[];
+    }
+
+    const qobuzResolved = await Promise.allSettled(
+      recommendations.slice(0, limit).map(async (rec) => {
+        const cacheKey = `${rec.artist} ${rec.title}`;
+        const cached = searchCache.current.get(cacheKey);
+        const data = cached
+          ? { tracks: { items: cached.tracks, total: cached.tracks.length, limit: 25, offset: 0 } }
+          : await searchQobuz(cacheKey);
+
+        if (!cached && data.tracks?.items) {
+          searchCache.current.set(cacheKey, {
+            artists: [],
+            tracks: data.tracks.items,
+            albums: [],
+          });
+        }
+
+        const tracks = data.tracks?.items ?? [];
+        const normalizedTitle = rec.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const normalizedArtist = rec.artist.toLowerCase().replace(/[^a-z0-9]/g, '');
+        return tracks.find((track: QobuzTrack) => {
+          const trackTitle = (track.title ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const trackArtist = (track.performer?.name ?? track.album?.artist?.name ?? '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, '');
+          return (trackTitle.includes(normalizedTitle) || normalizedTitle.includes(trackTitle)) &&
+            (trackArtist.includes(normalizedArtist) || normalizedArtist.includes(trackArtist));
+        }) ?? null;
+      }),
+    );
+
+    return qobuzResolved
+      .flatMap((result) => (result.status === 'fulfilled' && result.value ? [result.value] : []))
+      .filter((track, index, collection): track is QobuzTrack =>
+        track != null &&
+        track.id != null &&
+        collection.findIndex((entry) => entry.id === track.id) === index,
+      );
+  }
+
   async function buildAutoplayTracks(baseTrack: QobuzTrack) {
     const insights = buildListeningInsights(listeningProfile);
     const currentArtistName = baseTrack.performer?.name ?? baseTrack.album?.artist?.name;
+    const likedSignals = listeningProfile.trackSignals.filter((signal) => signal.isLiked);
     const autoplaySeedCandidates: RecommendationSeed[] = [];
 
     if (currentArtistName) {
@@ -1695,88 +1744,107 @@ export default function App() {
       return [] as QobuzTrack[];
     }
 
-    const primaryResults = await loadRecommendationSeedResults(uniqueSeeds);
+    const lastfmSeeds: Array<{ artist: string; title: string }> = [];
+
+    const pushLastFmSeed = (artist: string | undefined, title: string | undefined) => {
+      const normalizedArtist = artist?.trim();
+      const normalizedTitle = title?.trim();
+      if (!normalizedArtist || !normalizedTitle) {
+        return;
+      }
+
+      if (!lastfmSeeds.some((seed) => seed.artist === normalizedArtist && seed.title === normalizedTitle)) {
+        lastfmSeeds.push({ artist: normalizedArtist, title: normalizedTitle });
+      }
+    };
+
+    pushLastFmSeed(currentArtistName, baseTrack.title);
+
+    likedSignals.slice(0, 3).forEach((signal) => {
+      pushLastFmSeed(signal.performer?.name ?? signal.album?.artist?.name, signal.title);
+    });
+
+    listeningProfile.recents.slice(0, 4).forEach((play) => {
+      if (lastfmSeeds.length < 6) {
+        pushLastFmSeed(play.performer?.name ?? play.album?.artist?.name, play.title);
+      }
+    });
+
     const knownArtists = new Set(
       [
         currentArtistName,
         ...uniqueSeeds.map((seed) => seed.query),
         ...listeningProfile.plays.map((play: PlayedTrack) => play.performer?.name ?? play.album?.artist?.name),
+        ...likedSignals.map((signal) => signal.performer?.name ?? signal.album?.artist?.name),
       ]
         .map((value) => normalizeText(value))
         .filter((value) => value.length > 0),
     );
 
-    const discoveryLimit = insights.stage >= 3 ? 4 : insights.stage >= 2 ? 3 : 2;
-    const discoverySeedMap = new Map<string, RecommendationSeed>();
-
-    const pushDiscoverySeed = (name: string | undefined, weight: number) => {
-      const query = name?.trim();
-      if (!query) {
-        return;
-      }
-
-      const normalized = normalizeText(query);
-      if (!normalized || knownArtists.has(normalized)) {
-        return;
-      }
-
-      const nextSeed: RecommendationSeed = {
-        key: `autoplay-discovery:${normalized}`,
-        query,
-        kind: 'artist',
-        weight: Math.max(weight, 1),
-        source: 'discovery-artist',
-      };
-
-      const current = discoverySeedMap.get(normalized);
-      if (!current || nextSeed.weight > current.weight) {
-        discoverySeedMap.set(normalized, nextSeed);
-      }
-    };
-
-    const similarArtistSettled = window.kplayer?.getSimilarArtists
-      ? await Promise.allSettled(
-          primaryResults
-            .filter(({ seed }) => seed.kind === 'artist' || seed.source === 'taste-artist')
-            .slice(0, 5)
-            .map(async ({ seed, artists }) => {
-              const matchedArtist =
-                artists.find((artist: QobuzArtist) => normalizeText(artist.name) === normalizeText(seed.query)) ?? artists[0] ?? seed.query;
-
-              return {
+    const [lastfmRecs, lastfmSimilarArtistGroups, primaryResults] = await Promise.all([
+      lastfmSeeds.length > 0
+        ? getLastFmRecommendations(lastfmSeeds, 6, 18).catch(() => [])
+        : Promise.resolve([]),
+      uniqueSeeds.length > 0
+        ? Promise.allSettled(
+            uniqueSeeds
+              .filter((seed: RecommendationSeed) => seed.kind === 'artist')
+              .slice(0, 5)
+              .map(async (seed: RecommendationSeed) => ({
                 seed,
-                artists: await window.kplayer?.getSimilarArtists?.(matchedArtist),
-              };
-            }),
-        )
-      : [];
+                artists: await getLastFmSimilarArtists(seed.query, 8),
+              })),
+          )
+        : Promise.resolve([]),
+      loadRecommendationSeedResults(uniqueSeeds),
+    ]);
 
-    similarArtistSettled
+    const discoverySeeds = (lastfmSimilarArtistGroups ?? [])
       .flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
-      .forEach(({ seed, artists }) => {
-        (artists ?? []).slice(0, 3).forEach((artistName, index) => {
-          pushDiscoverySeed(artistName, seed.weight - 1.1 - index * 0.28);
-        });
-      });
+      .flatMap(({ seed, artists }) =>
+        artists.map((artist, index) => ({
+          key: `autoplay-discovery:${normalizeText(artist.name)}`,
+          query: artist.name,
+          kind: 'artist' as const,
+          weight: Math.max(1.8, seed.weight - 0.6 - index * 0.22 + artist.match * 2.1),
+          source: 'discovery-artist' as const,
+        })),
+      )
+      .filter((seed, index, collection) => {
+        const normalized = normalizeText(seed.query);
+        if (!normalized || knownArtists.has(normalized)) {
+          return false;
+        }
 
-    if (discoverySeedMap.size < discoveryLimit) {
-      primaryResults.forEach(({ seed, artists }) => {
-        artists.slice(0, 4).forEach((artist: QobuzArtist, index: number) => {
-          pushDiscoverySeed(artist.name, seed.weight - 1.35 - index * 0.24);
-        });
-      });
-    }
-
-    const discoverySeeds = [...discoverySeedMap.values()]
+        return collection.findIndex((entry) => normalizeText(entry.query) === normalized) === index;
+      })
       .sort((left, right) => right.weight - left.weight || left.query.localeCompare(right.query))
-      .slice(0, discoveryLimit);
-    const discoveryResults = discoverySeeds.length > 0 ? await loadRecommendationSeedResults(discoverySeeds) : [];
+      .slice(0, insights.stage >= 3 ? 6 : insights.stage >= 2 ? 4 : 3);
+
+    const [discoveryResults, lastfmTracks] = await Promise.all([
+      discoverySeeds.length > 0 ? loadRecommendationSeedResults(discoverySeeds) : Promise.resolve([]),
+      resolveLastFmRecommendationsToTracks(lastfmRecs, 40),
+    ]);
 
     const excludedTrackIds = new Set<number>([
       baseTrack.id,
       ...(playbackQueueRef.current?.entries.map((entry) => entry.track.id) ?? []),
     ]);
-    const successfulResults = [...primaryResults, ...discoveryResults];
+
+    const lastfmSeedResult: SeedResult = {
+      seed: {
+        key: `autoplay-lastfm:${baseTrack.id}`,
+        query: `Autoplay Last.fm ${baseTrack.id}`,
+        kind: 'track',
+        weight: 10.4,
+        source: 'taste-artist',
+      },
+      tracks: lastfmTracks,
+      albums: [],
+      artists: [],
+    };
+
+    const successfulResults = [...primaryResults, ...discoveryResults, lastfmSeedResult];
     const feedTracks = buildHomeFeed(listeningProfile, successfulResults).tracks
       .filter((track) => !excludedTrackIds.has(track.id))
       .map((track) => resolvePlaybackTrack(track));
@@ -2924,11 +2992,12 @@ export default function App() {
   }, []);
 
   const homeFeedLoadedRef = useRef(false);
+  const [recommendationReloadKey, setRecommendationReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    // Use a longer debounce if we already have a feed, shorter for first load
-    const delay = homeFeedLoadedRef.current ? 8000 : 400;
+    // Skip debounce when explicitly reloading, otherwise use longer delay after first load
+    const delay = recommendationReloadKey > 0 && !homeFeedLoadedRef.current ? 0 : homeFeedLoadedRef.current ? 8000 : 400;
     const timeout = setTimeout(() => {
       void loadHomeRecommendations();
     }, delay);
@@ -2937,33 +3006,7 @@ export default function App() {
       const insights = buildListeningInsights(listeningProfile);
       const baseSeeds = buildRecommendationSeeds(insights);
 
-      // Augment seeds with artists frequent in the user's playlists (only impacts Recommended Songs)
-      const playlistArtistCounts = new Map<string, { name: string; count: number }>();
-      for (const playlist of playlists) {
-        for (const track of playlist.tracks) {
-          const name = track.performer?.name?.trim();
-          if (!name) continue;
-          const key = name.toLowerCase();
-          const entry = playlistArtistCounts.get(key);
-          if (entry) {
-            entry.count += 1;
-          } else {
-            playlistArtistCounts.set(key, { name, count: 1 });
-          }
-        }
-      }
-      const playlistSeeds: RecommendationSeed[] = [...playlistArtistCounts.values()]
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 6)
-        .map(({ name, count }) => ({
-          key: `playlist-artist:${name.toLowerCase()}`,
-          query: name,
-          kind: 'artist' as const,
-          weight: Math.min(3.5, 1.5 + count * 0.25),
-          source: 'taste-artist' as const,
-        }));
-
-      // Also use liked track artists as strong recommendation signals
+      // Use liked track artists as recommendation signals
       const likedSignals = listeningProfile.trackSignals.filter((s) => s.isLiked);
       const likedArtistCounts = new Map<string, { name: string; count: number }>();
       for (const signal of likedSignals) {
@@ -2988,7 +3031,7 @@ export default function App() {
           source: 'taste-artist' as const,
         }));
 
-      const seeds = [...baseSeeds, ...likedSeeds, ...playlistSeeds];
+      const seeds = [...baseSeeds, ...likedSeeds];
       const uniqueSeeds = seeds.filter(
         (seed: RecommendationSeed, index: number, collection: RecommendationSeed[]) =>
           collection.findIndex((entry: RecommendationSeed) => entry.query.toLowerCase() === seed.query.toLowerCase()) === index,
@@ -3001,6 +3044,7 @@ export default function App() {
 
       setIsHomeLoading(true);
 
+      // Load Qobuz search results (needed for artist sections and album recs)
       const loadSeedResults = async (seedsToLoad: RecommendationSeed[]) => {
         const settled = await Promise.allSettled(
           seedsToLoad.map(async (seed): Promise<SeedResult> => {
@@ -3028,120 +3072,157 @@ export default function App() {
         return settled.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
       };
 
-      const primaryResults = await loadSeedResults(uniqueSeeds);
-
-      if (!primaryResults) {
-        return;
+      // Build Last.fm seeds from liked tracks + recents
+      const lastfmSeeds: Array<{ artist: string; title: string }> = [];
+      for (const signal of likedSignals.slice(0, 4)) {
+        const artist = signal.performer?.name?.trim() ?? signal.album?.artist?.name?.trim();
+        const title = signal.title?.trim();
+        if (artist && title) lastfmSeeds.push({ artist, title });
       }
-
-      // Show primary results immediately while discovery loads in background
-      const primaryFeed = buildHomeFeed(listeningProfile, primaryResults);
-      if (!cancelled) {
-        startTransition(() => {
-          setHomeFeed(primaryFeed);
-        });
-        setIsHomeLoading(false);
-        homeFeedLoadedRef.current = true;
+      for (const play of listeningProfile.recents.slice(0, 6)) {
+        const artist = play.performer?.name?.trim() ?? play.album?.artist?.name?.trim();
+        const title = play.title?.trim();
+        if (artist && title && !lastfmSeeds.some((s) => s.artist === artist && s.title === title)) {
+          lastfmSeeds.push({ artist, title });
+        }
+        if (lastfmSeeds.length >= 8) break;
       }
 
       const knownArtists = new Set(
         [
           ...uniqueSeeds.map((seed: RecommendationSeed) => seed.query),
-          ...listeningProfile.plays.map((play: PlayedTrack) => play.performer?.name ?? play.album?.artist?.name),
+          ...listeningProfile.plays.map((play) => play.performer?.name ?? play.album?.artist?.name),
+          ...likedSignals.map((signal) => signal.performer?.name ?? signal.album?.artist?.name),
         ]
           .map((value) => normalizeText(value))
           .filter((value) => value.length > 0),
       );
 
-      const discoveryLimit = insights.stage >= 3 ? 6 : insights.stage >= 2 ? 4 : 2;
-      const discoverySeedMap = new Map<string, RecommendationSeed>();
-
-      const pushDiscoverySeed = (name: string | undefined, weight: number) => {
-        const query = name?.trim();
-        if (!query) {
-          return;
-        }
-
-        const normalized = normalizeText(query);
-        if (!normalized || knownArtists.has(normalized)) {
-          return;
-        }
-
-        const nextSeed: RecommendationSeed = {
-          key: `discovery-artist:${normalized}`,
-          query,
-          kind: 'artist',
-          weight: Math.max(weight, 1),
-          source: 'discovery-artist',
-        };
-
-        const current = discoverySeedMap.get(normalized);
-        if (!current || nextSeed.weight > current.weight) {
-          discoverySeedMap.set(normalized, nextSeed);
-        }
-      };
-
-      const similarArtistSettled = window.kplayer?.getSimilarArtists
-        ? await Promise.allSettled(
-            primaryResults
-              .filter(({ seed }) => seed.source === 'taste-artist')
-              .map(async ({ seed, artists }) => {
-                const matchedArtist =
-                  artists.find((artist: QobuzArtist) => normalizeText(artist.name) === normalizeText(seed.query)) ??
-                  artists[0] ??
-                  seed.query;
-
-                return {
+      // Run Last.fm track similarity, artist similarity, and Qobuz artist catalog searches in parallel.
+      const [lastfmRecs, lastfmSimilarArtistGroups, primaryResults] = await Promise.all([
+        lastfmSeeds.length > 0
+          ? getLastFmRecommendations(lastfmSeeds, 8, 20).catch(() => [])
+          : Promise.resolve([]),
+        uniqueSeeds.length > 0
+          ? Promise.allSettled(
+              uniqueSeeds
+                .filter((seed: RecommendationSeed) => seed.kind === 'artist')
+                .slice(0, 5)
+                .map(async (seed: RecommendationSeed) => ({
                   seed,
-                  artists: await window.kplayer?.getSimilarArtists?.(matchedArtist),
-                };
-              }),
-          )
+                  artists: await getLastFmSimilarArtists(seed.query, 8),
+                })),
+            )
+          : Promise.resolve([]),
+        loadSeedResults(uniqueSeeds),
+      ]);
+
+      if (cancelled || !primaryResults) {
+        return;
+      }
+
+      const similarArtistDiscoverySeeds = (lastfmSimilarArtistGroups ?? [])
+        .flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
+        .flatMap(({ seed, artists }) =>
+          artists.map((artist, index) => ({
+            key: `lastfm-discovery:${normalizeText(artist.name)}`,
+            query: artist.name,
+            kind: 'artist' as const,
+            weight: Math.max(1.6, seed.weight - 0.5 - index * 0.18 + artist.match * 2.4),
+            source: 'discovery-artist' as const,
+          })),
+        )
+        .filter((seed, index, collection) => {
+          const normalized = normalizeText(seed.query);
+          if (!normalized || knownArtists.has(normalized)) {
+            return false;
+          }
+
+          return collection.findIndex((entry) => normalizeText(entry.query) === normalized) === index;
+        })
+        .sort((left, right) => right.weight - left.weight)
+        .slice(0, 8);
+
+      const discoveryResults = similarArtistDiscoverySeeds.length > 0
+        ? await loadSeedResults(similarArtistDiscoverySeeds)
         : [];
 
       if (cancelled) {
         return;
       }
 
-      similarArtistSettled
-        .flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
-        .forEach(({ seed, artists }) => {
-          (artists ?? []).slice(0, 3).forEach((artistName, index) => {
-            pushDiscoverySeed(artistName, seed.weight - 0.85 - index * 0.22);
-          });
-        });
+      // Resolve Last.fm recommendations on Qobuz
+      let lastfmTracks: QobuzTrack[] = [];
+      if (lastfmRecs.length > 0) {
+        const qobuzResolved = await Promise.allSettled(
+          lastfmRecs.slice(0, 50).map(async (rec) => {
+            const cacheKey = `${rec.artist} ${rec.title}`;
+            const cached = searchCache.current.get(cacheKey);
+            const data = cached
+              ? { tracks: { items: cached.tracks, total: cached.tracks.length, limit: 25, offset: 0 } }
+              : await searchQobuz(cacheKey);
 
-      if (discoverySeedMap.size < discoveryLimit) {
-        primaryResults.forEach(({ seed, artists }) => {
-          artists.slice(0, 6).forEach((artist: QobuzArtist, index: number) => {
-            pushDiscoverySeed(artist.name, seed.weight - 1.3 - index * 0.24);
-          });
-        });
+            if (!cached && data.tracks?.items) {
+              searchCache.current.set(cacheKey, {
+                artists: [],
+                tracks: data.tracks.items,
+                albums: [],
+              });
+            }
+
+            const tracks = data.tracks?.items ?? [];
+            const normalTitle = rec.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const normalArtist = rec.artist.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return tracks.find(
+              (t: QobuzTrack) => {
+                const tTitle = (t.title ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                const tArtist = (t.performer?.name ?? t.album?.artist?.name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                return (tTitle.includes(normalTitle) || normalTitle.includes(tTitle)) &&
+                  (tArtist.includes(normalArtist) || normalArtist.includes(tArtist));
+              },
+            ) ?? null;
+          }),
+        );
+
+        if (cancelled) return;
+
+        lastfmTracks = qobuzResolved
+          .flatMap((r) => (r.status === 'fulfilled' && r.value ? [r.value] : []))
+          .filter((t): t is QobuzTrack => t != null && t.id != null);
       }
 
-      const discoverySeeds = [...discoverySeedMap.values()]
-        .sort((left, right) => right.weight - left.weight)
-        .slice(0, discoveryLimit);
+      // Build feed: Last.fm tracks as the sole source for Recommended Songs
+      const lastfmSeedResult: SeedResult = {
+        seed: {
+          key: 'lastfm:similar',
+          query: 'Last.fm Similar',
+          kind: 'track',
+          weight: 8.8,
+          source: 'taste-artist',
+        },
+        tracks: lastfmTracks,
+        albums: [],
+        artists: [],
+      };
 
-      const discoveryResults = discoverySeeds.length > 0 ? await loadSeedResults(discoverySeeds) : [];
+      // Combine: Last.fm track similarity for core picks, Last.fm artist similarity for breadth,
+      // and Qobuz artist searches for artist sections + albums.
+      const allResults = [
+        ...primaryResults,
+        ...(discoveryResults ?? []),
+        lastfmSeedResult,
+      ];
+      const homeFeedResult = buildHomeFeed(listeningProfile, allResults);
 
-      if (cancelled) {
-        return;
-      }
-
-      if (discoveryResults && discoveryResults.length > 0) {
-        const successfulResults = [...primaryResults, ...discoveryResults];
-        const nextHomeFeed = buildHomeFeed(listeningProfile, successfulResults);
-        if (!areStringListsEqual(nextHomeFeed.seedQueries, syncedRecommendationSeedQueries)) {
-          setSyncedRecommendationSeedQueries(nextHomeFeed.seedQueries);
+      if (!cancelled) {
+        if (!areStringListsEqual(homeFeedResult.seedQueries, syncedRecommendationSeedQueries)) {
+          setSyncedRecommendationSeedQueries(homeFeedResult.seedQueries);
         }
         startTransition(() => {
-          setHomeFeed(nextHomeFeed);
+          setHomeFeed(homeFeedResult);
         });
-      } else {
-        if (!areStringListsEqual(primaryFeed.seedQueries, syncedRecommendationSeedQueries)) {
-          setSyncedRecommendationSeedQueries(primaryFeed.seedQueries);
-        }
+        setIsHomeLoading(false);
+        homeFeedLoadedRef.current = true;
       }
     }
 
@@ -3151,7 +3232,7 @@ export default function App() {
       cancelled = true;
       clearTimeout(timeout);
     };
-  }, [listeningProfile, playlists]);
+  }, [listeningProfile, playlists, recommendationReloadKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4000,6 +4081,19 @@ export default function App() {
                       <div className="section-header">
                         <div className="section-title-wrap">
                           <h2>Recommended Songs</h2>
+                          <button
+                            className="reload-recommendations-btn"
+                            type="button"
+                            title="Recarregar recomendações"
+                            disabled={isHomeLoading}
+                            onClick={() => {
+                              searchCache.current.clear();
+                              homeFeedLoadedRef.current = false;
+                              setRecommendationReloadKey((k) => k + 1);
+                            }}
+                          >
+                            <RotateCcw size={15} className={isHomeLoading ? 'spin' : ''} />
+                          </button>
                         </div>
                       </div>
 
