@@ -1,6 +1,7 @@
 # monokennyy
 
 A desktop music player built with Electron, React and TypeScript. Stream hi-res FLAC and HD audio with personalized recommendations, lyrics, playlists, and offline downloads.
+This program was ENTIRELY inspired by [Monochrome](https://monochrome.tf)
 
 ## Screenshots
 
