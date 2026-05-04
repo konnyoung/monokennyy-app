@@ -11,6 +11,7 @@ export interface AuthUser {
   id: string;
   email: string;
   name?: string;
+  username?: string;
   avatar?: string;
 }
 
@@ -21,6 +22,7 @@ export function currentUser(): AuthUser | null {
     id: model.id,
     email: (model as { email?: string }).email ?? '',
     name: (model as { name?: string }).name,
+    username: (model as { username?: string }).username,
     avatar: (model as { avatar?: string }).avatar,
   };
 }
@@ -66,4 +68,28 @@ export async function refreshAuth(): Promise<AuthUser | null> {
     pb.authStore.clear();
     return null;
   }
+}
+
+export async function updateProfile(data: { name?: string; username?: string; avatar?: File | null }): Promise<AuthUser> {
+  const record = pb.authStore.record;
+  if (!record || !pb.authStore.isValid) throw new Error('Not authenticated');
+
+  const formData = new FormData();
+  if (data.name !== undefined) formData.append('name', data.name);
+  if (data.username !== undefined) formData.append('username', data.username);
+  if (data.avatar) formData.append('avatar', data.avatar);
+  else if (data.avatar === null) formData.append('avatar', '');
+
+  await pb.collection('users').update(record.id, formData);
+  await pb.collection('users').authRefresh();
+  const user = currentUser();
+  if (!user) throw new Error('Profile update failed');
+  return user;
+}
+
+export function getAvatarUrl(user: AuthUser): string | null {
+  if (!user.avatar) return null;
+  const record = pb.authStore.record;
+  if (!record) return null;
+  return `${PB_URL}/api/files/${record.collectionId}/${record.id}/${user.avatar}`;
 }

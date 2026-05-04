@@ -78,9 +78,10 @@ import {
 import { FullscreenPlayer } from './FullscreenPlayer';
 import { NowPlayingSidePanel } from './NowPlayingSidePanel';
 import type { QobuzAlbum, QobuzAlbumDetail, QobuzArtist, QobuzSearchResults, QobuzTrack } from './types';
-import { currentUser, loginWithPassword, logout as pbLogout, onAuthChange, refreshAuth, signupWithPassword, type AuthUser } from './pb';
+import { currentUser, getAvatarUrl, loginWithPassword, logout as pbLogout, onAuthChange, refreshAuth, signupWithPassword, updateProfile, type AuthUser } from './pb';
 import { PLAYLIST_LIMIT, pullPlaylistsFromRemote, pushPlaylistsToRemote, TRACKS_PER_PLAYLIST_LIMIT } from './playlist-sync';
 import { pullUserState, pushUserState } from './user-state-sync';
+import { extractLikedTracks, mergeLikedIntoSignals, pullLikedTracksFromRemote, pullRecentsFromRemote, pushLikedTracksToRemote, pushRecentsToRemote } from './library-sync';
 
 type Page =
   | { kind: 'home' }
@@ -832,6 +833,10 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [profileForm, setProfileForm] = useState({ name: '', username: '', avatarFile: null as File | null, avatarPreview: '' });
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [syncReadyUserId, setSyncReadyUserId] = useState<string | null>(null);
   const [syncedRecommendationSeedQueries, setSyncedRecommendationSeedQueries] = useState<string[]>([]);
   const [availableUpdate, setAvailableUpdate] = useState<{ latestVersion: string; downloadUrl: string } | null>(null);
@@ -957,6 +962,51 @@ export default function App() {
     setStatus('Você saiu da conta.');
   };
 
+  const openProfileModal = () => {
+    if (!authUser) return;
+    const avatarUrl = getAvatarUrl(authUser);
+    setProfileForm({
+      name: authUser.name || '',
+      username: authUser.username || '',
+      avatarFile: null,
+      avatarPreview: avatarUrl || '',
+    });
+    setProfileError(null);
+    setProfileBusy(false);
+    setShowProfileModal(true);
+  };
+
+  const submitProfile = async () => {
+    setProfileError(null);
+    setProfileBusy(true);
+    try {
+      const updated = await updateProfile({
+        name: profileForm.name.trim(),
+        username: profileForm.username.trim(),
+        ...(profileForm.avatarFile ? { avatar: profileForm.avatarFile } : {}),
+      });
+      setAuthUser(updated);
+      setShowProfileModal(false);
+      setStatus('Profile updated.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update profile.';
+      setProfileError(message);
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setProfileError('Image must be under 2 MB.');
+      return;
+    }
+    setProfileError(null);
+    setProfileForm((f) => ({ ...f, avatarFile: file, avatarPreview: URL.createObjectURL(file) }));
+  };
+
   const searchCache = useRef(new Map<string, SearchResults>());
   const albumCache = useRef(new Map<string, QobuzAlbumDetail>());
   const albumSidebarCache = useRef(new Map<string, AlbumPageSidebarAlbum[]>());
@@ -1034,6 +1084,15 @@ export default function App() {
       index: Math.min(current.stack.length - 1, current.index + 1),
     }));
   }
+
+  useEffect(() => {
+    const handleMouseNav = (e: MouseEvent) => {
+      if (e.button === 3) { e.preventDefault(); goBack(); }
+      else if (e.button === 4) { e.preventDefault(); goForward(); }
+    };
+    window.addEventListener('mouseup', handleMouseNav);
+    return () => window.removeEventListener('mouseup', handleMouseNav);
+  }, []);
 
   function goHome() {
     pushPage(homePage);
@@ -1412,8 +1471,22 @@ export default function App() {
     });
   }
 
-  function renderTrackLikeIndicator(trackId: number) {
+  function renderTrackLikeIndicator(trackId: number, track?: QobuzTrack) {
     const liked = isTrackLiked(listeningProfile, trackId);
+    if (track) {
+      return (
+        <span
+          className={`track-meta-icon track-like-btn ${liked ? 'is-liked' : ''}`}
+          onClick={(e) => { e.stopPropagation(); e.preventDefault(); toggleTrackLikeFromMenu(track); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); toggleTrackLikeFromMenu(track); } }}
+          role="button"
+          tabIndex={0}
+          title={liked ? 'Unlike' : 'Like'}
+        >
+          <Heart size={16} fill={liked ? 'currentColor' : 'none'} />
+        </span>
+      );
+    }
     return <Heart size={16} className={`track-meta-icon ${liked ? 'is-liked' : ''}`} fill={liked ? 'currentColor' : 'none'} />;
   }
 
@@ -1992,6 +2065,30 @@ export default function App() {
     if (removedCurrentTrack) {
       await startPlayback(nextEntries[nextIndex].track);
     }
+  }
+
+  function moveQueueEntry(fromIndex: number, toIndex: number) {
+    const queue = playbackQueueRef.current;
+    if (!queue || fromIndex === toIndex) return;
+    if (fromIndex < 0 || fromIndex >= queue.entries.length) return;
+    if (toIndex < 0 || toIndex >= queue.entries.length) return;
+
+    const nextEntries = [...queue.entries];
+    const [moved] = nextEntries.splice(fromIndex, 1);
+    nextEntries.splice(toIndex, 0, moved);
+
+    let nextCurrentIndex = queue.currentIndex;
+    if (fromIndex === queue.currentIndex) {
+      nextCurrentIndex = toIndex;
+    } else {
+      if (fromIndex < queue.currentIndex && toIndex >= queue.currentIndex) {
+        nextCurrentIndex -= 1;
+      } else if (fromIndex > queue.currentIndex && toIndex <= queue.currentIndex) {
+        nextCurrentIndex += 1;
+      }
+    }
+
+    setPlaybackQueue({ ...queue, entries: nextEntries, currentIndex: nextCurrentIndex });
   }
 
   function clearQueue() {
@@ -2579,13 +2676,20 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const [remotePlaylists, remoteState] = await Promise.all([
+        const [remotePlaylists, remoteState, remoteRecents, remoteLiked] = await Promise.all([
           pullPlaylistsFromRemote(),
           pullUserState(),
+          pullRecentsFromRemote(),
+          pullLikedTracksFromRemote(),
         ]);
         if (cancelled) return;
 
-        const nextProfile = remoteState?.listeningProfile ?? createEmptyProfile();
+        const baseProfile = remoteState?.listeningProfile ?? createEmptyProfile();
+        const nextProfile = {
+          ...baseProfile,
+          recents: remoteRecents.length > 0 ? remoteRecents : baseProfile.recents,
+          trackSignals: remoteLiked.length > 0 ? mergeLikedIntoSignals(baseProfile.trackSignals, remoteLiked) : baseProfile.trackSignals,
+        };
         setPlaylists(remotePlaylists.slice(0, PLAYLIST_LIMIT));
         setListeningProfile(nextProfile);
         setHomeFeed(buildHomeFeed(nextProfile, []));
@@ -2643,14 +2747,18 @@ export default function App() {
     }
     userStatePushTimerRef.current = window.setTimeout(() => {
       userStatePushTimerRef.current = null;
-      void pushUserState({
-        appSettings,
-        listeningProfile,
-        recommendations: {
-          seedQueries: syncedRecommendationSeedQueries,
-          updatedAt: Date.now(),
-        },
-      }).catch((error) => {
+      void Promise.all([
+        pushUserState({
+          appSettings,
+          listeningProfile,
+          recommendations: {
+            seedQueries: syncedRecommendationSeedQueries,
+            updatedAt: Date.now(),
+          },
+        }),
+        pushRecentsToRemote(listeningProfile.recents),
+        pushLikedTracksToRemote(extractLikedTracks(listeningProfile.trackSignals)),
+      ]).catch((error) => {
         const message = error instanceof Error ? error.message : 'Falha ao enviar dados.';
         setStatus(message);
       });
@@ -2815,8 +2923,15 @@ export default function App() {
     }
   }, []);
 
+  const homeFeedLoadedRef = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
+    // Use a longer debounce if we already have a feed, shorter for first load
+    const delay = homeFeedLoadedRef.current ? 8000 : 400;
+    const timeout = setTimeout(() => {
+      void loadHomeRecommendations();
+    }, delay);
 
     async function loadHomeRecommendations() {
       const insights = buildListeningInsights(listeningProfile);
@@ -2848,25 +2963,36 @@ export default function App() {
           source: 'taste-artist' as const,
         }));
 
-      const syncedSeeds: RecommendationSeed[] = syncedRecommendationSeedQueries
-        .map((query, index) => query.trim())
-        .filter((query) => query.length > 0)
-        .map((query, index) => ({
-          key: `synced-seed:${normalizeText(query)}`,
-          query,
+      // Also use liked track artists as strong recommendation signals
+      const likedSignals = listeningProfile.trackSignals.filter((s) => s.isLiked);
+      const likedArtistCounts = new Map<string, { name: string; count: number }>();
+      for (const signal of likedSignals) {
+        const name = signal.performer?.name?.trim() ?? signal.album?.artist?.name?.trim();
+        if (!name) continue;
+        const key = name.toLowerCase();
+        const entry = likedArtistCounts.get(key);
+        if (entry) {
+          entry.count += 1;
+        } else {
+          likedArtistCounts.set(key, { name, count: 1 });
+        }
+      }
+      const likedSeeds: RecommendationSeed[] = [...likedArtistCounts.values()]
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 8)
+        .map(({ name, count }) => ({
+          key: `liked-artist:${name.toLowerCase()}`,
+          query: name,
           kind: 'artist' as const,
-          weight: Math.max(1.4, 3.8 - index * 0.14),
-          source: 'catalog' as const,
+          weight: Math.min(6.0, 3.0 + count * 0.7),
+          source: 'taste-artist' as const,
         }));
 
-      const seeds = [...baseSeeds, ...playlistSeeds, ...syncedSeeds];
+      const seeds = [...baseSeeds, ...likedSeeds, ...playlistSeeds];
       const uniqueSeeds = seeds.filter(
         (seed: RecommendationSeed, index: number, collection: RecommendationSeed[]) =>
           collection.findIndex((entry: RecommendationSeed) => entry.query.toLowerCase() === seed.query.toLowerCase()) === index,
       );
-
-      const immediateFeed = buildHomeFeed(listeningProfile, []);
-      setHomeFeed(immediateFeed);
 
       if (uniqueSeeds.length === 0) {
         setIsHomeLoading(false);
@@ -2915,6 +3041,7 @@ export default function App() {
           setHomeFeed(primaryFeed);
         });
         setIsHomeLoading(false);
+        homeFeedLoadedRef.current = true;
       }
 
       const knownArtists = new Set(
@@ -3022,8 +3149,9 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
     };
-  }, [listeningProfile, playlists, syncedRecommendationSeedQueries]);
+  }, [listeningProfile, playlists]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3700,7 +3828,7 @@ export default function App() {
               }}
               type="button"
             >
-              <span>{authUser ? (authUser.name?.[0] ?? authUser.email[0] ?? '?').toUpperCase() : <User size={16} aria-hidden="true" />}</span>
+              <span>{authUser ? (authUser.avatar ? <img alt="" className="account-pill-avatar" src={getAvatarUrl(authUser)!} /> : (authUser.name?.[0] ?? authUser.email[0] ?? '?').toUpperCase()) : <User size={16} aria-hidden="true" />}</span>
             </button>
             {showAccountMenu && authUser ? (
               <div className="account-menu">
@@ -3708,6 +3836,9 @@ export default function App() {
                   <strong>{authUser.name || authUser.email.split('@')[0]}</strong>
                   <span>{authUser.email}</span>
                 </div>
+                <button className="account-menu-item" onClick={() => { setShowAccountMenu(false); openProfileModal(); }} type="button">
+                  Edit Profile
+                </button>
                 <button className="account-menu-item" onClick={handleLogout} type="button">
                   Sair
                 </button>
@@ -4798,7 +4929,7 @@ export default function App() {
                                   </div>
                                   {renderArtistInline(track.performer, artistPage.artist)}
                                 </div>
-                                {renderTrackLikeIndicator(track.id)}
+                                {renderTrackLikeIndicator(track.id, track)}
                                 <span className="track-duration">{formatDuration(track.duration)}</span>
                               </button>
                             ))}
@@ -4948,7 +5079,7 @@ export default function App() {
                               </span>
                             </div>
                             <div className="album-track-meta">
-                              {renderTrackLikeIndicator(track.id)}
+                              {renderTrackLikeIndicator(track.id, mergeTrackWithAlbumFallback(track, album))}
                               <span className="track-duration">{formatDuration(track.duration)}</span>
                             </div>
                             <span
@@ -5102,6 +5233,7 @@ export default function App() {
         onDownloadQueue={openQueueDownload}
         onLikeAllQueue={likeAllQueueTracks}
         onLyricsSeek={seekLyricsAndResume}
+        onMoveQueueItem={moveQueueEntry}
         onPlayQueueIndex={(index) => void playQueueIndex(index)}
         onRemoveQueueIndex={(index) => void removeQueueEntryAtIndex(index)}
         onToggleQueueTrackLike={toggleTrackLikeFromMenu}
@@ -5301,6 +5433,61 @@ export default function App() {
                   {authBusy ? '...' : authMode === 'login' ? 'Entrar' : 'Criar'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showProfileModal && authUser ? (
+        <div className="modal-overlay" onClick={() => (profileBusy ? null : setShowProfileModal(false))}>
+          <div className="modal-content profile-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Edit Profile</h3>
+            <div className="profile-avatar-section">
+              <label className="profile-avatar-label" htmlFor="avatar-input">
+                {profileForm.avatarPreview ? (
+                  <img alt="Avatar" className="profile-avatar-img" src={profileForm.avatarPreview} />
+                ) : (
+                  <div className="profile-avatar-placeholder">
+                    {(authUser.name?.[0] ?? authUser.email[0] ?? '?').toUpperCase()}
+                  </div>
+                )}
+                <span className="profile-avatar-hint">Change photo</span>
+              </label>
+              <input accept="image/*" id="avatar-input" onChange={handleAvatarChange} style={{ display: 'none' }} type="file" />
+            </div>
+            <input
+              className="modal-input"
+              onChange={(e) => setProfileForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="Display name"
+              type="text"
+              value={profileForm.name}
+            />
+            <input
+              className="modal-input"
+              onChange={(e) => setProfileForm((f) => ({ ...f, username: e.target.value }))}
+              placeholder="Username"
+              type="text"
+              value={profileForm.username}
+            />
+            <input
+              className="modal-input"
+              disabled
+              type="email"
+              value={authUser.email}
+            />
+            {profileError ? <p className="modal-error">{profileError}</p> : null}
+            <div className="modal-actions">
+              <button className="ghost-pill" disabled={profileBusy} onClick={() => setShowProfileModal(false)} type="button">
+                Cancel
+              </button>
+              <button
+                className="ghost-pill modal-primary"
+                disabled={profileBusy}
+                onClick={() => void submitProfile()}
+                type="button"
+              >
+                {profileBusy ? '...' : 'Save'}
+              </button>
             </div>
           </div>
         </div>

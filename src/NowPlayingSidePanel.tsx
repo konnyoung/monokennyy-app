@@ -23,6 +23,7 @@ type NowPlayingSidePanelProps = {
   onClose: () => void;
   onPlayQueueIndex: (index: number) => void;
   onRemoveQueueIndex: (index: number) => void;
+  onMoveQueueItem: (fromIndex: number, toIndex: number) => void;
   onClearQueue: () => void;
   onLikeAllQueue: () => void;
   onToggleQueueTrackLike: (track: QobuzTrack) => void;
@@ -54,6 +55,7 @@ export function NowPlayingSidePanel({
   onClose,
   onPlayQueueIndex,
   onRemoveQueueIndex,
+  onMoveQueueItem,
   onClearQueue,
   onLikeAllQueue,
   onToggleQueueTrackLike,
@@ -69,6 +71,8 @@ export function NowPlayingSidePanel({
 
   const [lyricsStatus, setLyricsStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [lyricsOffset, setLyricsOffset] = useState(0);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   useEffect(() => {
     onLyricsSeekRef.current = onLyricsSeek;
@@ -284,7 +288,14 @@ export function NowPlayingSidePanel({
           queueItems.length > 0 ? (
             <div className="queue-list">
               {queueItems.map((item, index) => (
-                <div className={`queue-track-item ${item.isCurrent ? 'playing' : ''}`} key={item.queueId}>
+                <div
+                  className={`queue-track-item ${item.isCurrent ? 'playing' : ''} ${dragIndex === index ? 'dragging' : ''} ${dragOverIndex === index ? 'drag-over' : ''}`}
+                  draggable
+                  key={item.queueId}
+                  onDragEnd={() => { if (dragIndex !== null && dragOverIndex !== null && dragIndex !== dragOverIndex) { onMoveQueueItem(dragIndex, dragOverIndex); } setDragIndex(null); setDragOverIndex(null); }}
+                  onDragOver={(e) => { e.preventDefault(); setDragOverIndex(index); }}
+                  onDragStart={() => setDragIndex(index)}
+                >
                   <button className="queue-track-main" onClick={() => onPlayQueueIndex(index)} type="button">
                     <span aria-hidden="true" className="drag-handle">
                       <GripVertical size={16} />

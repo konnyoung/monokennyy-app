@@ -508,6 +508,54 @@ button {
   font-size: 13px;
 }
 
+/* Profile modal */
+.profile-modal {
+  max-width: 360px;
+}
+
+.profile-avatar-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.profile-avatar-label {
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.profile-avatar-img {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border);
+}
+
+.profile-avatar-placeholder {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.profile-avatar-hint {
+  font-size: 12px;
+  color: var(--accent, #e8365d);
+  font-weight: 500;
+}
+
 .modal-primary {
   background: var(--accent, #e8365d) !important;
   color: #ffffff !important;
@@ -1192,6 +1240,11 @@ input[type='search']::-webkit-search-cancel-button {
 
 .account-pill span {
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
 }
 
 .account-pill:hover {
@@ -1202,6 +1255,21 @@ input[type='search']::-webkit-search-cancel-button {
 .account-pill.is-signed {
   background: var(--accent, #e8365d);
   color: #fff;
+}
+
+.account-pill-avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.account-pill:has(.account-pill-avatar) {
+  overflow: hidden;
+  padding: 0;
+  border: 2px solid var(--border);
+  background: none;
 }
 
 .account-menu-wrapper {
@@ -1810,6 +1878,24 @@ input[type='search']::-webkit-search-cancel-button {
 
 .track-meta-icon.is-liked {
   color: var(--accent);
+}
+
+.track-like-btn {
+  cursor: pointer;
+  border-radius: 50%;
+  padding: 4px;
+  transition: color 150ms ease, transform 150ms ease, opacity 150ms ease;
+  opacity: 0;
+}
+
+.track-row:hover .track-like-btn,
+.track-like-btn.is-liked {
+  opacity: 1;
+}
+
+.track-like-btn:hover {
+  color: var(--accent);
+  transform: scale(1.2);
 }
 
 .track-duration {
@@ -3914,6 +4000,15 @@ input[type='search']::-webkit-search-cancel-button {
   border-left-color: var(--accent);
 }
 
+.queue-track-item.dragging {
+  opacity: 0.4;
+}
+
+.queue-track-item.drag-over {
+  border-top: 2px solid var(--accent, #e8365d);
+  border-radius: 0;
+}
+
 .queue-track-main {
   min-width: 0;
   display: grid;
@@ -3936,6 +4031,7 @@ input[type='search']::-webkit-search-cancel-button {
   justify-content: center;
   color: var(--muted);
   opacity: 0.62;
+  cursor: grab;
 }
 
 .queue-track-item:hover .drag-handle,
