@@ -36,7 +36,7 @@ export function isAuthenticated(): boolean {
 export async function loginWithPassword(email: string, password: string): Promise<AuthUser> {
   await pb.collection('users').authWithPassword(email.trim(), password);
   const user = currentUser();
-  if (!user) throw new Error('Login falhou');
+  if (!user) throw new Error('Login failed');
   return user;
 }
 

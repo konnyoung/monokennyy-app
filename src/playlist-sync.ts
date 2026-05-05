@@ -57,7 +57,7 @@ async function listRemotePlaylistRecords(): Promise<RemotePlaylistRecord[]> {
   });
 
   if (!response.ok) {
-    throw new Error(await getResponseMessage(response, 'Falha ao listar playlists remotas.'));
+    throw new Error(await getResponseMessage(response, 'Failed to list remote playlists.'));
   }
 
   const payload = await response.json() as PocketBaseListResponse<RemotePlaylistRecord>;
@@ -80,7 +80,7 @@ async function createRemotePlaylistRecord(payload: ReturnType<typeof playlistToR
   });
 
   if (!response.ok) {
-    throw new Error(await getResponseMessage(response, 'Falha ao criar playlist remota.'));
+    throw new Error(await getResponseMessage(response, 'Failed to create remote playlist.'));
   }
 }
 
@@ -100,7 +100,7 @@ async function updateRemotePlaylistRecord(recordId: string, payload: ReturnType<
   });
 
   if (!response.ok) {
-    throw new Error(await getResponseMessage(response, 'Falha ao atualizar playlist remota.'));
+    throw new Error(await getResponseMessage(response, 'Failed to update remote playlist.'));
   }
 }
 
@@ -118,7 +118,7 @@ async function deleteRemotePlaylistRecord(recordId: string) {
   });
 
   if (!response.ok) {
-    throw new Error(await getResponseMessage(response, 'Falha ao remover playlist remota.'));
+    throw new Error(await getResponseMessage(response, 'Failed to delete remote playlist.'));
   }
 }
 

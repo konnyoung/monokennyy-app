@@ -60,7 +60,7 @@ async function listRemoteStateRecords(): Promise<RemoteSettingsRecord[]> {
   });
 
   if (!response.ok) {
-    throw new Error(await getResponseMessage(response, 'Falha ao listar estado remoto.'));
+    throw new Error(await getResponseMessage(response, 'Failed to list remote state.'));
   }
 
   const payload = await response.json() as PocketBaseListResponse<RemoteSettingsRecord>;
@@ -83,7 +83,7 @@ async function createRemoteStateRecord(payload: { user: string; data: UserStateB
   });
 
   if (!response.ok) {
-    throw new Error(await getResponseMessage(response, 'Falha ao criar estado remoto.'));
+    throw new Error(await getResponseMessage(response, 'Failed to create remote state.'));
   }
 }
 
@@ -103,7 +103,7 @@ async function updateRemoteStateRecord(recordId: string, payload: { user: string
   });
 
   if (!response.ok) {
-    throw new Error(await getResponseMessage(response, 'Falha ao atualizar estado remoto.'));
+    throw new Error(await getResponseMessage(response, 'Failed to update remote state.'));
   }
 }
 

@@ -859,7 +859,7 @@ export default function App() {
       return true;
     }
 
-    setStatus('Sincronizando conta. Aguarde um instante e tente de novo.');
+    setStatus('Account is still syncing. Please wait a moment and try again.');
     return false;
   };
 
@@ -920,25 +920,25 @@ export default function App() {
     const email = authForm.email.trim();
     const password = authForm.password;
     if (!email || !password) {
-      setAuthError('Email e senha são obrigatórios.');
+      setAuthError('Email and password are required.');
       return;
     }
     if (authMode === 'signup' && password.length < 8) {
-      setAuthError('Senha precisa ter ao menos 8 caracteres.');
+      setAuthError('Password must be at least 8 characters.');
       return;
     }
     setAuthBusy(true);
     try {
       if (authMode === 'login') {
         await loginWithPassword(email, password);
-        setStatus('Login efetuado.');
+        setStatus('Signed in.');
       } else {
         await signupWithPassword(email, password, authForm.name);
-        setStatus('Conta criada.');
+        setStatus('Account created.');
       }
       setShowAuthModal(false);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Falha na autenticação.';
+      const message = error instanceof Error ? error.message : 'Authentication failed.';
       setAuthError(message);
     } finally {
       setAuthBusy(false);
@@ -960,7 +960,7 @@ export default function App() {
         // Ignore storage errors; in-memory state has already been cleared.
       }
     }
-    setStatus('Você saiu da conta.');
+    setStatus('Signed out.');
   };
 
   const openProfileModal = () => {
@@ -1220,7 +1220,7 @@ export default function App() {
       return null;
     }
     if (playlists.length >= PLAYLIST_LIMIT) {
-      setStatus(`Limite de ${PLAYLIST_LIMIT} playlists atingido.`);
+      setStatus(`Playlist limit of ${PLAYLIST_LIMIT} reached.`);
       return playlists[0];
     }
     const playlist: Playlist = {
@@ -1293,7 +1293,7 @@ export default function App() {
         const toAdd = newTracks.filter((t) => !existingIds.has(t.id));
         const combined = [...pl.tracks, ...toAdd];
         if (combined.length > TRACKS_PER_PLAYLIST_LIMIT) {
-          setStatus(`Limite de ${TRACKS_PER_PLAYLIST_LIMIT} músicas por playlist atingido.`);
+          setStatus(`Track limit of ${TRACKS_PER_PLAYLIST_LIMIT} per playlist reached.`);
         }
         return { ...pl, tracks: combined.slice(0, TRACKS_PER_PLAYLIST_LIMIT), updatedAt: now };
       }),
@@ -2378,7 +2378,7 @@ export default function App() {
       failedTracks > 0
         ? `${completedTracks} downloaded, ${failedTracks} failed.`
         : target === 'app'
-          ? `${completedTracks} ${completedTracks === 1 ? 'track saved inside kPlayer.' : 'tracks saved inside kPlayer.'}`
+          ? `${completedTracks} ${completedTracks === 1 ? 'track saved inside monokennyy.' : 'tracks saved inside monokennyy.'}`
           : `${completedTracks} ${completedTracks === 1 ? 'track saved to disk.' : 'tracks saved to disk.'}`,
     );
   }
@@ -2739,7 +2739,7 @@ export default function App() {
 
     clearAccountScopedState();
     setSyncReadyUserId(null);
-    setStatus('Sincronizando conta...');
+    setStatus('Syncing account...');
 
     let cancelled = false;
     (async () => {
@@ -2769,10 +2769,10 @@ export default function App() {
         // Mark pull complete only AFTER the remote state is committed. This
         // unlocks the push effects below.
         setSyncReadyUserId(authUserId);
-        setStatus('Conta sincronizada.');
+        setStatus('Account synced.');
       } catch (error) {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : 'Falha ao sincronizar conta.';
+          const message = error instanceof Error ? error.message : 'Failed to sync account.';
           setStatus(message);
         }
       }
@@ -2793,7 +2793,7 @@ export default function App() {
     playlistPushTimerRef.current = window.setTimeout(() => {
       playlistPushTimerRef.current = null;
       void pushPlaylistsToRemote(playlists).catch((error) => {
-        const message = error instanceof Error ? error.message : 'Falha ao enviar playlists.';
+        const message = error instanceof Error ? error.message : 'Failed to upload playlists.';
         setStatus(message);
       });
     }, 1200);
@@ -2827,7 +2827,7 @@ export default function App() {
         pushRecentsToRemote(listeningProfile.recents),
         pushLikedTracksToRemote(extractLikedTracks(listeningProfile.trackSignals)),
       ]).catch((error) => {
-        const message = error instanceof Error ? error.message : 'Falha ao enviar dados.';
+        const message = error instanceof Error ? error.message : 'Failed to upload data.';
         setStatus(message);
       });
     }, 2000);
@@ -2932,37 +2932,37 @@ export default function App() {
 
   useEffect(() => {
     if (currentPage.kind === 'home') {
-      document.title = 'kPlayer';
+      document.title = 'monokennyy';
       return;
     }
 
     if (currentPage.kind === 'search') {
-      document.title = `Search: ${currentPage.query} • kPlayer`;
+      document.title = `Search: ${currentPage.query} • monokennyy`;
       return;
     }
 
     if (currentPage.kind === 'library') {
-      document.title = 'Library • kPlayer';
+      document.title = 'Library • monokennyy';
       return;
     }
 
     if (currentPage.kind === 'playlist') {
       const playlistTitle = playlists.find((entry) => entry.id === currentPage.playlistId)?.name ?? 'Playlist';
-      document.title = `${playlistTitle} • kPlayer`;
+      document.title = `${playlistTitle} • monokennyy`;
       return;
     }
 
     if (currentPage.kind === 'settings') {
-      document.title = 'Settings • kPlayer';
+      document.title = 'Settings • monokennyy';
       return;
     }
 
     if (currentPage.kind === 'artist') {
-      document.title = `${artistPage?.artist.name ?? currentPage.artistName} • kPlayer`;
+      document.title = `${artistPage?.artist.name ?? currentPage.artistName} • monokennyy`;
       return;
     }
 
-    document.title = `${album?.title ?? 'Album'} • kPlayer`;
+    document.title = `${album?.title ?? 'Album'} • monokennyy`;
   }, [album?.title, artistPage?.artist.name, currentPage, playlists]);
 
   useEffect(() => {
@@ -2971,10 +2971,10 @@ export default function App() {
     }
 
     void window.kplayer.setDiscordPresence({
-      details: 'Ouvindo monochrome',
+      details: 'Listening to monochrome',
       state: nowPlaying
-        ? `${nowPlaying.title ?? 'Untitled track'} - ${nowPlayingArtistName}${isPlaying ? '' : ' (pausado)'}`
-        : 'Escolhendo a próxima música',
+        ? `${nowPlaying.title ?? 'Untitled track'} - ${nowPlayingArtistName}${isPlaying ? '' : ' (paused)'}`
+        : 'Choosing the next song',
       trackTitle: nowPlaying?.title ?? '',
       artistName: nowPlaying ? nowPlayingArtistName : '',
       albumTitle: nowPlaying ? nowPlayingAlbumTitle : '',
@@ -3819,7 +3819,7 @@ export default function App() {
                       const progressPercent = Math.round(overallProgress * 100);
                       const progressSummary = job.status === 'completed'
                         ? job.target === 'app'
-                          ? 'Saved inside kPlayer'
+                          ? 'Saved inside monokennyy'
                           : 'Saved to disk'
                         : job.status === 'failed'
                           ? job.error ?? 'Download failed'
@@ -3898,7 +3898,7 @@ export default function App() {
 
           <div className="account-menu-wrapper" ref={accountMenuRef}>
             <button
-              aria-label={authUser ? `Conta ${authUser.email}` : 'Entrar'}
+              aria-label={authUser ? `Account ${authUser.email}` : 'Sign in'}
               className={`account-pill ${authUser ? 'is-signed' : ''}`}
               onClick={() => {
                 if (authUser) {
@@ -3921,7 +3921,7 @@ export default function App() {
                   Edit Profile
                 </button>
                 <button className="account-menu-item" onClick={handleLogout} type="button">
-                  Sair
+                  Sign out
                 </button>
               </div>
             ) : null}
@@ -3980,7 +3980,7 @@ export default function App() {
             <div className="page-stack">
               {homeFeed.stage === 0 ? (
                 <div className="home-empty">
-                  <h1>Welcome to kPlayer</h1>
+                  <h1>Welcome to monokennyy</h1>
                   <p>You haven't listened to anything yet. Search for your favorite songs to get started!</p>
                 </div>
               ) : (
@@ -4084,7 +4084,7 @@ export default function App() {
                           <button
                             className="reload-recommendations-btn"
                             type="button"
-                            title="Recarregar recomendações"
+                            title="Reload recommendations"
                             disabled={isHomeLoading}
                             onClick={() => {
                               searchCache.current.clear();
@@ -4716,7 +4716,7 @@ export default function App() {
                       <div className="settings-target-grid">
                         <button className={`settings-target-card ${appSettings.defaultDownloadTarget === 'app' ? 'active' : ''}`} onClick={() => setAppSettings((current) => ({ ...current, defaultDownloadTarget: 'app' }))} type="button">
                           <strong>Offline in app</strong>
-                          <span>Best for listening without internet inside kPlayer.</span>
+                          <span>Best for listening without internet inside monokennyy.</span>
                         </button>
                         <button className={`settings-target-card ${appSettings.defaultDownloadTarget === 'disk' ? 'active' : ''}`} onClick={() => setAppSettings((current) => ({ ...current, defaultDownloadTarget: 'disk' }))} type="button">
                           <strong>Save to disk</strong>
@@ -5266,7 +5266,7 @@ export default function App() {
                 <button className={`settings-target-card download-target-card ${appSettings.defaultDownloadTarget === 'app' ? 'active' : ''}`} onClick={() => void startDownload('app')} type="button">
                   <div className="download-target-card-copy">
                     <strong>Save for Offline Playback</strong>
-                    <span>Stores the download inside kPlayer so the Library can play it without internet.</span>
+                    <span>Stores the download inside monokennyy so the Library can play it without internet.</span>
                   </div>
                   <small className="download-target-card-meta">Saved to the app library</small>
                 </button>
@@ -5468,18 +5468,18 @@ export default function App() {
       {showAuthModal ? (
         <div className="modal-overlay" onClick={() => (authBusy ? null : setShowAuthModal(false))}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3>{authMode === 'login' ? 'Entrar' : 'Criar conta'}</h3>
+            <h3>{authMode === 'login' ? 'Sign in' : 'Create account'}</h3>
             <p className="modal-subtle">
               {authMode === 'login'
-                ? 'Acesse sua conta kPlayer para sincronizar playlists, recentes e configurações.'
-                : 'Sua conta vai sincronizar playlists, recentes e configurações entre dispositivos.'}
+                ? 'Sign in to your monokennyy account to sync playlists, recents, and settings.'
+                : 'Your account will sync playlists, recents, and settings across devices.'}
             </p>
             {authMode === 'signup' ? (
               <input
                 autoFocus
                 className="modal-input"
                 onChange={(e) => setAuthForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="Nome (opcional)"
+                placeholder="Name (optional)"
                 type="text"
                 value={authForm.name}
               />
@@ -5500,7 +5500,7 @@ export default function App() {
                   void submitAuth();
                 }
               }}
-              placeholder={authMode === 'signup' ? 'Senha (mín. 8 caracteres)' : 'Senha'}
+              placeholder={authMode === 'signup' ? 'Password (min. 8 characters)' : 'Password'}
               type="password"
               value={authForm.password}
             />
@@ -5512,11 +5512,11 @@ export default function App() {
                 onClick={() => setAuthMode((m) => (m === 'login' ? 'signup' : 'login'))}
                 type="button"
               >
-                {authMode === 'login' ? 'Criar conta' : 'Já tenho conta'}
+                {authMode === 'login' ? 'Create account' : 'I already have an account'}
               </button>
               <div className="modal-actions">
                 <button className="ghost-pill" disabled={authBusy} onClick={() => setShowAuthModal(false)} type="button">
-                  Cancelar
+                  Cancel
                 </button>
                 <button
                   className="ghost-pill modal-primary"
@@ -5524,7 +5524,7 @@ export default function App() {
                   onClick={() => void submitAuth()}
                   type="button"
                 >
-                  {authBusy ? '...' : authMode === 'login' ? 'Entrar' : 'Criar'}
+                  {authBusy ? '...' : authMode === 'login' ? 'Sign in' : 'Create'}
                 </button>
               </div>
             </div>
