@@ -2292,14 +2292,14 @@ export default function App() {
           preferredDirectory: target === 'disk' ? preferredDirectory : '',
           track: getTrackDownloadPayload(track),
         }, (progress) => {
-          const isTranscoding = progress.stage === 'transcoding';
+          const isProcessing = progress.stage === 'processing' || progress.stage === 'transcoding';
           updateDownloadJob(jobId, {
             status: 'downloading',
             currentTrackTitle: trackTitle,
             currentTrackProgress: progress.progress,
             currentTrackBytesReceived: progress.bytesReceived,
             currentTrackBytesTotal: progress.totalBytes,
-            currentTrackStage: isTranscoding ? 'transcoding' : 'downloading',
+            currentTrackStage: isProcessing ? 'processing' : 'downloading',
             completedTracks,
             failedTracks,
           });
@@ -3842,16 +3842,16 @@ export default function App() {
                       }
                       const currentSpeed = speedEntry?.speed ?? 0;
                       const speedLabel = currentSpeed > 0 ? `${formatByteSize(currentSpeed)}/s` : '';
-                      const isTranscoding = job.status === 'downloading' && job.currentTrackStage === 'transcoding';
-                      const bytesSummary = isTranscoding
-                        ? 'Converting with ffmpeg…'
+                      const isProcessing = job.status === 'downloading' && (job.currentTrackStage === 'processing' || job.currentTrackStage === 'transcoding');
+                      const bytesSummary = isProcessing
+                        ? 'Finalizing download…'
                         : job.currentTrackBytesTotal > 0
                           ? `${formatByteSize(job.currentTrackBytesReceived)} / ${formatByteSize(job.currentTrackBytesTotal)}${speedLabel ? ` • ${speedLabel}` : ''}`
                           : getDownloadFormatLabel(job.format);
-                      const liveProgressSummary = isTranscoding
-                        ? `Converting to ${getDownloadFormatLabel(job.format)}…`
+                      const liveProgressSummary = isProcessing
+                        ? `Finalizing ${getDownloadFormatLabel(job.format)}…`
                         : progressSummary;
-                      const liveSpeedLabel = isTranscoding ? '' : speedLabel;
+                      const liveSpeedLabel = isProcessing ? '' : speedLabel;
 
                       return (
                         <article className={`downloads-bubble-item ${job.status === 'failed' ? 'is-failed' : ''} ${job.status === 'completed' ? 'is-complete' : ''}`} key={job.id}>
@@ -3863,8 +3863,8 @@ export default function App() {
                               {job.status === 'downloading' ? (
                                 <>
                                   <span>{liveProgressSummary}{liveSpeedLabel ? ` • ${liveSpeedLabel}` : ''}</span>
-                                  <div className={`downloads-bubble-progress ${isTranscoding ? 'is-indeterminate' : ''}`} aria-hidden="true">
-                                    <span style={isTranscoding ? undefined : { width: `${progressPercent}%` }} />
+                                  <div className={`downloads-bubble-progress ${isProcessing ? 'is-indeterminate' : ''}`} aria-hidden="true">
+                                    <span style={isProcessing ? undefined : { width: `${progressPercent}%` }} />
                                   </div>
                                 </>
                               ) : job.status === 'completed' ? (

@@ -24,7 +24,7 @@ export interface DownloadFormatSpec {
   extension: string;
   /** Qobuz quality code to fetch from the streaming API */
   sourceQuality: AudioQuality;
-  /** ffmpeg arguments excluding -i input and output filename. null = no transcode (write source bytes) */
+  /** ffmpeg arguments excluding -i input and output filename. null = copy source audio while the Electron process still applies output metadata. */
   ffmpegArgs: string[] | null;
 }
 
@@ -79,7 +79,7 @@ export interface DownloadJob {
   currentTrackProgress: number;
   currentTrackBytesReceived: number;
   currentTrackBytesTotal: number;
-  currentTrackStage?: 'downloading' | 'transcoding';
+  currentTrackStage?: 'downloading' | 'processing' | 'transcoding';
   createdAt: number;
   updatedAt: number;
   error?: string;

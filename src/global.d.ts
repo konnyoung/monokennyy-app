@@ -7,7 +7,7 @@ type DownloadProgressEvent = {
   bytesReceived: number;
   totalBytes: number;
   progress: number;
-  stage?: 'downloading' | 'transcoding' | 'complete';
+  stage?: 'downloading' | 'processing' | 'transcoding' | 'complete';
 };
 
 type DiscordPresencePayload = {

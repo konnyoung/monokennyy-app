@@ -90,6 +90,8 @@ let discordIpcNonceCounter = 0;
 let discordIpcPendingCallbacks = new Map();
 let discordActivityRevision = 0;
 let discordActivity = null;
+let discordRpcShuttingDown = false;
+let discordRpcShutdownPromise = null;
 
 // Mirror of DOWNLOAD_FORMATS from src/app-state.ts. Keep in sync.
 const DOWNLOAD_FORMATS = {
@@ -119,17 +121,14 @@ function resolveFfmpegBinary() {
   return ffmpegPath;
 }
 
-async function transcodeWithFfmpeg(srcPath, outPath, args, onProgress) {
+function runFfmpeg(args, onProgress) {
   const binary = resolveFfmpegBinary();
   if (!binary) {
     throw new Error('Bundled ffmpeg binary is unavailable');
   }
 
-  await ensureDirectory(path.dirname(outPath));
-  const fullArgs = ['-y', '-hide_banner', '-loglevel', 'error', '-i', srcPath, ...args, outPath];
-
   return new Promise((resolve, reject) => {
-    const child = spawn(binary, fullArgs, { windowsHide: true });
+    const child = spawn(binary, args, { windowsHide: true });
     let stderr = '';
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
@@ -138,7 +137,7 @@ async function transcodeWithFfmpeg(srcPath, outPath, args, onProgress) {
     child.on('close', (code) => {
       if (code === 0) {
         if (onProgress) {
-          onProgress({ stage: 'transcoding', progress: 1 });
+          onProgress({ stage: 'processing', progress: 1 });
         }
         resolve();
       } else {
@@ -146,6 +145,80 @@ async function transcodeWithFfmpeg(srcPath, outPath, args, onProgress) {
       }
     });
   });
+}
+
+async function runFfmpegFinalize({ srcPath, outPath, formatSpec, track, coverPath, onProgress }) {
+  await ensureDirectory(path.dirname(outPath));
+
+  const ext = formatSpec.extension;
+  const supportsCover = Boolean(coverPath) && (ext === 'flac' || ext === 'mp3' || ext === 'm4a');
+  const inputs = ['-i', srcPath];
+  if (supportsCover) {
+    inputs.push('-i', coverPath);
+  }
+
+  let mappingArgs;
+  if (formatSpec.ffmpegArgs) {
+    // Transcode case: re-encode audio with the requested codec settings.
+    const stripped = formatSpec.ffmpegArgs.filter((a) => a !== '-vn');
+    mappingArgs = supportsCover
+      ? [...stripped, '-map', '1:v', '-c:v:0', 'copy', '-disposition:v:0', 'attached_pic']
+      : ['-vn', ...stripped];
+  } else {
+    // Source copy case: keep original audio bytes, drop other streams.
+    mappingArgs = supportsCover
+      ? [
+          '-map_metadata', '-1',
+          '-map', '0:a:0', '-c:a', 'copy',
+          '-map', '1:v', '-c:v:0', 'copy', '-disposition:v:0', 'attached_pic',
+        ]
+      : ['-vn', '-map_metadata', '-1', '-map', '0:a:0', '-c:a', 'copy'];
+  }
+
+  const containerArgs = ext === 'mp3' ? ['-id3v2_version', '3'] : [];
+  const metadataArgs = buildTrackMetadataArgs(track, ext);
+  const coverMetadataArgs = supportsCover
+    ? ['-metadata:s:v', 'title=Album cover', '-metadata:s:v', 'comment=Cover (front)']
+    : [];
+
+  const fullArgs = [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    ...inputs,
+    ...mappingArgs,
+    ...containerArgs,
+    ...metadataArgs,
+    ...coverMetadataArgs,
+    outPath,
+  ];
+
+  await runFfmpeg(fullArgs, onProgress);
+}
+
+async function downloadCoverImage(url) {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!response.ok) {
+      return null;
+    }
+
+    const contentType = String(response.headers.get('content-type') ?? '').toLowerCase();
+    const extension = contentType.includes('png') ? 'png' : 'jpg';
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length === 0) {
+      return null;
+    }
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kplayer-cover-'));
+    const filePath = path.join(tmpDir, `cover-${randomUUID()}.${extension}`);
+    await fs.writeFile(filePath, buffer);
+    return { dir: tmpDir, path: filePath };
+  } catch {
+    return null;
+  }
 }
 
 function sanitizePathSegment(value) {
@@ -196,6 +269,42 @@ function detectAudioExtension(contentType, quality) {
   }
 
   return quality === '5' ? 'mp3' : 'flac';
+}
+
+function normalizeMetadataValue(value) {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildTrackMetadataArgs(track, extension) {
+  const args = [];
+  const title = normalizeMetadataValue(track?.title);
+  const artistName = normalizeMetadataValue(track?.artistName);
+  const albumTitle = normalizeMetadataValue(track?.albumTitle);
+  const trackNumber = Number.isFinite(track?.trackNumber) && track.trackNumber > 0
+    ? String(Math.trunc(track.trackNumber))
+    : '';
+
+  if (title) {
+    args.push('-metadata', `title=${title}`);
+  }
+  if (artistName) {
+    args.push('-metadata', `artist=${artistName}`);
+    args.push('-metadata', `album_artist=${artistName}`);
+  }
+  if (albumTitle) {
+    args.push('-metadata', `album=${albumTitle}`);
+  }
+  if (trackNumber) {
+    args.push('-metadata', `track=${trackNumber}`);
+    args.push('-metadata', `tracknumber=${trackNumber}`);
+  }
+  if (extension === 'mp3') {
+    args.push('-id3v2_version', '3');
+  }
+
+  return args;
 }
 
 function isDiscordRpcEnabled() {
@@ -271,7 +380,7 @@ function clearDiscordReconnectTimeout() {
 }
 
 function scheduleDiscordRpcReconnect() {
-  if (!isDiscordRpcEnabled() || discordIpcReconnectTimeout) return;
+  if (!isDiscordRpcEnabled() || discordRpcShuttingDown || discordIpcReconnectTimeout) return;
   discordIpcReconnectTimeout = setTimeout(() => {
     discordIpcReconnectTimeout = null;
     void connectDiscordIpc();
@@ -558,6 +667,43 @@ async function applyDiscordActivity() {
 
 async function ensureDiscordRpcClient() {
   return connectDiscordIpc();
+}
+
+async function clearDiscordActivity() {
+  discordActivity = null;
+  discordActivityRevision += 1;
+
+  if (!discordIpcReady || !discordIpcSocket) {
+    return false;
+  }
+
+  try {
+    await sendIpcCommand('SET_ACTIVITY', {
+      pid: getDiscordActivityPid(),
+      activity: null,
+    });
+    return true;
+  } catch {
+    destroyDiscordIpc();
+    if (!discordRpcShuttingDown) {
+      scheduleDiscordRpcReconnect();
+    }
+    return false;
+  }
+}
+
+async function shutdownDiscordRpc() {
+  discordRpcShuttingDown = true;
+  clearDiscordReconnectTimeout();
+
+  await Promise.race([
+    clearDiscordActivity(),
+    new Promise((resolve) => {
+      setTimeout(resolve, 1000);
+    }),
+  ]);
+
+  destroyDiscordIpc();
 }
 
 function buildTrackFilename(track, extension) {
@@ -1051,27 +1197,22 @@ ipcMain.handle('kplayer:save-track-download', async (event, payload) => {
   const reportProgress = requestId
     ? (progress) => emitDownloadProgress(event.sender, { requestId, ...progress })
     : null;
-
-  const needsTranscode = formatSpec.ffmpegArgs !== null;
   const finalExtension = formatSpec.extension;
   const finalFilename = buildTrackFilename(track, finalExtension);
 
   const writeFinalFile = async (finalPath) => {
     await ensureDirectory(path.dirname(finalPath));
 
-    if (!needsTranscode) {
-      // Stream straight to destination — no transcoding required.
-      await streamResponseToFile(response, finalPath, reportProgress);
-      return;
-    }
-
-    // Download to a temp file, then transcode with ffmpeg, then remove temp.
+    // Stream the source bytes to a temp file first, then run ffmpeg to finalize
+    // the output container, embed the cover art, and write track metadata.
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kplayer-dl-'));
-    const tmpPath = path.join(tmpDir, `source-${randomUUID()}`);
+    const sourceExtension = detectAudioExtension(response.headers.get('content-type'), formatSpec.sourceQuality);
+    const tmpPath = path.join(tmpDir, `source-${randomUUID()}.${sourceExtension}`);
+    const cover = await downloadCoverImage(track?.coverUrl);
     try {
       await streamResponseToFile(response, tmpPath, (progress) => {
         if (reportProgress) {
-          // Reserve the last 15% of the progress bar for the transcode step.
+          // Reserve the last 15% of the progress bar for the finalize step.
           reportProgress({
             ...progress,
             stage: 'downloading',
@@ -1081,10 +1222,17 @@ ipcMain.handle('kplayer:save-track-download', async (event, payload) => {
       });
 
       if (reportProgress) {
-        reportProgress({ stage: 'transcoding', progress: 0.9, bytesReceived: 0, totalBytes: 0 });
+        reportProgress({ stage: 'processing', progress: 0.9, bytesReceived: 0, totalBytes: 0 });
       }
 
-      await transcodeWithFfmpeg(tmpPath, finalPath, formatSpec.ffmpegArgs, reportProgress);
+      await runFfmpegFinalize({
+        srcPath: tmpPath,
+        outPath: finalPath,
+        formatSpec,
+        track,
+        coverPath: cover?.path,
+        onProgress: reportProgress,
+      });
 
       if (reportProgress) {
         const stat = await fs.stat(finalPath).catch(() => null);
@@ -1093,6 +1241,9 @@ ipcMain.handle('kplayer:save-track-download', async (event, payload) => {
       }
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      if (cover?.dir) {
+        await fs.rm(cover.dir, { recursive: true, force: true }).catch(() => {});
+      }
     }
   };
 
@@ -1200,24 +1351,8 @@ ipcMain.handle('kplayer:set-discord-presence', async (_event, payload) => {
 });
 
 ipcMain.handle('kplayer:clear-discord-presence', async () => {
-  discordActivity = null;
-  discordActivityRevision += 1;
-
-  if (!discordIpcReady || !discordIpcSocket) {
-    return { enabled: isDiscordRpcEnabled(), connected: false };
-  }
-
-  try {
-    await sendIpcCommand('SET_ACTIVITY', {
-      pid: getDiscordActivityPid(),
-      activity: null,
-    });
-    return { enabled: true, connected: true };
-  } catch {
-    destroyDiscordIpc();
-    scheduleDiscordRpcReconnect();
-    return { enabled: true, connected: false };
-  }
+  const cleared = await clearDiscordActivity();
+  return { enabled: isDiscordRpcEnabled(), connected: cleared && Boolean(discordIpcReady) };
 });
 
 ipcMain.handle('kplayer:check-for-update', async () => {
@@ -1281,8 +1416,18 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('before-quit', () => {
-  destroyDiscordIpc();
+app.on('before-quit', (event) => {
+  if (!isDiscordRpcEnabled() || discordRpcShuttingDown) {
+    destroyDiscordIpc();
+    return;
+  }
+
+  event.preventDefault();
+  if (!discordRpcShutdownPromise) {
+    discordRpcShutdownPromise = shutdownDiscordRpc().finally(() => {
+      app.exit(0);
+    });
+  }
 });
 
 app.on('window-all-closed', () => {
