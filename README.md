@@ -27,7 +27,6 @@ This program was ENTIRELY inspired by [Monochrome](https://monochrome.tf)
 - **Lyrics** — Synced lyrics panel
 - **Discord Rich Presence** — Show what you're listening to
 - **Session Restore** — Picks up where you left off
-- **Auto Updates** — Notifies when a new version is available
 
 ## Tech Stack
 
